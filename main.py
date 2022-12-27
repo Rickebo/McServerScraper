@@ -2,14 +2,17 @@ import argparse
 import asyncio
 import itertools
 import json
+import sys
+import threading
 from ipaddress import IPv4Network, IPv4Address
 from os import path
-from threading import Thread, Lock
-from typing import Iterable, Iterator, Callable
+from threading import Thread, Lock, Timer
+from typing import Iterable, Iterator, Callable, TextIO
 
 from mcstatus import JavaServer
 from mcstatus.pinger import PingResponse
 
+from AsynchronousCounter import AsynchronousCounter
 from buffered_iterator import BufferedIterator
 
 
@@ -20,6 +23,7 @@ def read_settings():
     parser.add_argument('-t', '--threads', type=int)
     parser.add_argument('-', '--port', type=int, default=25565)
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-o', '--output', type=str)
 
     return parser.parse_args()
 
@@ -41,17 +45,21 @@ async def scan(ip: IPv4Address, port: int) -> PingResponse | None:
 
         if status is not None:
             return status
-    except IOError:
+    except Exception:
         return None
 
 
 print_lock = Lock()
 
 
-def print_thread_safe(text: str):
+def print_thread_safe(text: str, line_start: bool = False):
     print_lock.acquire()
     try:
-        print(text)
+        if line_start:
+            sys.stdout.write('\r' + text)
+            sys.stdout.flush()
+        else:
+            print(text)
     finally:
         print_lock.release()
 
@@ -60,7 +68,8 @@ async def scan_ips(
         ip_iterator: BufferedIterator,
         port: int,
         verbose: bool,
-        handler: Callable[[PingResponse | None], None]
+        handler: Callable[[PingResponse | None], None],
+        writer: Callable[[str], None]
 ):
     for ip in ip_iterator:
         if verbose:
@@ -74,7 +83,7 @@ async def scan_ips(
         if result is None:
             continue
 
-        print_thread_safe(json.dumps({
+        output_text = json.dumps({
             'ip': str(ip),
             'port': str(port),
             'players': {
@@ -92,7 +101,9 @@ async def scan_ips(
             'description': result.description,
             'favicon': result.favicon,
             'latency': result.latency
-        }))
+        })
+
+        writer(output_text)
 
 
 def sync_scan_ips(
@@ -118,31 +129,52 @@ def start_scan(threads: int, **kwargs):
     for thread in threads:
         thread.start()
 
+    for thread in threads:
+        thread.join()
+
 
 def handle_data(
         response: PingResponse | None,
-        count_iterator: Iterator[int],
-        num_addresses: int
+        counter: AsynchronousCounter,
+        result_counter: AsynchronousCounter
 ):
-    current_count = next(count_iterator)
-    prev_count = current_count - 1
+    counter.increment()
+    if response is not None:
+        result_counter.increment()
 
-    old_progress = 100 * (float(prev_count) / num_addresses)
-    new_progress = 100 * (float(current_count) / num_addresses)
 
-    old_prog_int = int(old_progress)
-    new_prog_int = int(new_progress)
+def update_status(
+        current_count: int,
+        results: int,
+        num_addresses: int,
+        timer: threading.Timer
+):
+    current_percentage = (100 * current_count) // num_addresses
 
-    if old_prog_int <= new_prog_int:
-        return
+    prog_true = current_percentage // 2
+    prog_false = 50 - prog_true
 
-    print_thread_safe(f'{new_prog_int}%')
+    prog_str = '[' + prog_true * '#' + (100 - prog_false) * '-' + \
+               f'] {current_percentage}% (scanned {current_count} / {num_addresses}) {results} found'
+    print_thread_safe(
+        prog_str,
+        line_start=True
+    )
+    timer.run()
 
 
 def get_all(iterables: Iterable[Iterable]) -> Iterable:
     for iterable in iterables:
         for item in iterable:
             yield item
+
+
+def write_result(result: str, output_file: TextIO, output_lock: Lock):
+    if output_file is None:
+        print_thread_safe(result)
+    else:
+        with output_lock:
+            output_file.write(result + '\n')
 
 
 def main():
@@ -160,7 +192,20 @@ def main():
         iterator=iter(long_iterable)
     )
 
-    count_iterator = itertools.count()
+    counter = AsynchronousCounter()
+    result_counter = AsynchronousCounter()
+
+    file_lock = Lock() if args.output is not None else None
+    file_ref = open(args.output, 'a') if args.output is not None else None
+
+    output_timer = Timer(1, lambda: update_status(
+        current_count=counter.value,
+        results=result_counter.value,
+        num_addresses=num_addresses,
+        timer=output_timer
+    ))
+
+    output_timer.start()
 
     start_scan(
         threads=args.threads,
@@ -169,10 +214,18 @@ def main():
         verbose=args.verbose,
         handler=lambda response: handle_data(
             response=response,
-            count_iterator=count_iterator,
-            num_addresses=num_addresses
+            counter=counter,
+            result_counter=result_counter
+        ),
+        writer=lambda output_text: write_result(
+            result=output_text,
+            output_file=file_ref,
+            output_lock=file_lock
         )
     )
+
+    output_timer.cancel()
+    print(f'Done. Found {result_counter.value} servers.')
 
 
 if __name__ == '__main__':
