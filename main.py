@@ -66,6 +66,7 @@ def print_thread_safe(text: str, line_start: bool = False):
 
 
 def scan_ips(
+        is_cancelled: Callable[[], bool],
         ip_iterator: BufferedIterator,
         port: int,
         verbose: bool,
@@ -73,6 +74,9 @@ def scan_ips(
         writer: Callable[[str], None]
 ):
     for ip in ip_iterator:
+        if is_cancelled():
+            return
+
         if verbose:
             print_thread_safe(f'[INF] Scanning {str(ip)}:{port}...')
 
@@ -108,9 +112,11 @@ def scan_ips(
 
 
 def start_scan(threads: int, status_updater: Callable[[], None], **kwargs):
+    is_cancelled = False
     threads = [
         Thread(
             target=lambda: scan_ips(
+                lambda: is_cancelled,
                 **kwargs
             )
         )
@@ -126,6 +132,7 @@ def start_scan(threads: int, status_updater: Callable[[], None], **kwargs):
             status_updater()
     except KeyboardInterrupt:
         print('Cancelling...')
+        is_cancelled = True
         for thread in threads:
             thread.join()
 
