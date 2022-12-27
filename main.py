@@ -38,11 +38,11 @@ def read_ranges(hosts_file: str) -> Iterable[IPv4Network]:
             yield IPv4Network(line.strip('\n'))
 
 
-async def scan(ip: IPv4Address, port: int) -> PingResponse | None:
+def scan(ip: IPv4Address, port: int) -> PingResponse | None:
     server = JavaServer.lookup(f'{str(ip)}:{port}')
 
     try:
-        status = await server.async_status()
+        status = server.status()
 
         if status is not None:
             return status
@@ -65,7 +65,7 @@ def print_thread_safe(text: str, line_start: bool = False):
         print_lock.release()
 
 
-async def scan_ips(
+def scan_ips(
         ip_iterator: BufferedIterator,
         port: int,
         verbose: bool,
@@ -76,7 +76,7 @@ async def scan_ips(
         if verbose:
             print_thread_safe(f'[INF] Scanning {str(ip)}:{port}...')
 
-        result = await scan(ip=ip, port=port)
+        result = scan(ip=ip, port=port)
 
         if handler is not None:
             handler(result)
@@ -107,20 +107,10 @@ async def scan_ips(
         writer(output_text)
 
 
-def sync_scan_ips(
-        **kwargs
-):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    loop.run_until_complete(scan_ips(**kwargs))
-    loop.close()
-
-
 def start_scan(threads: int, status_updater: Callable[[], None], **kwargs):
     threads = [
         Thread(
-            target=lambda: sync_scan_ips(
+            target=lambda: scan_ips(
                 **kwargs
             )
         )
