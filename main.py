@@ -120,9 +120,15 @@ def start_scan(threads: int, status_updater: Callable[[], None], **kwargs):
     for thread in threads:
         thread.start()
 
-    while any(thread.is_alive() for thread in threads):
-        time.sleep(1)
-        status_updater()
+    try:
+        while any(thread.is_alive() for thread in threads):
+            time.sleep(1)
+            status_updater()
+    except KeyboardInterrupt:
+        print('Cancelling...')
+        for thread in threads:
+            thread.join()
+
 
 
 def handle_data(
