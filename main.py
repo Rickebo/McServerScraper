@@ -4,6 +4,7 @@ import itertools
 import json
 import sys
 import threading
+import time
 from ipaddress import IPv4Network, IPv4Address
 from os import path
 from threading import Thread, Lock, Timer
@@ -116,7 +117,7 @@ def sync_scan_ips(
     loop.close()
 
 
-def start_scan(threads: int, **kwargs):
+def start_scan(threads: int, status_updater: Callable[[], None], **kwargs):
     threads = [
         Thread(
             target=lambda: sync_scan_ips(
@@ -129,8 +130,9 @@ def start_scan(threads: int, **kwargs):
     for thread in threads:
         thread.start()
 
-    for thread in threads:
-        thread.join()
+    while any(thread.is_alive() for thread in threads):
+        time.sleep(1)
+        status_updater()
 
 
 def handle_data(
@@ -146,8 +148,7 @@ def handle_data(
 def update_status(
         current_count: int,
         results: int,
-        num_addresses: int,
-        timer: threading.Timer
+        num_addresses: int
 ):
     current_percentage = (100 * current_count) // num_addresses
 
@@ -156,11 +157,11 @@ def update_status(
 
     prog_str = '[' + prog_true * '#' + prog_false * '-' + \
                f'] {current_percentage}% (scanned {current_count} / {num_addresses}) {results} found'
+
     print_thread_safe(
         prog_str,
         line_start=True
     )
-    timer.run()
 
 
 def get_all(iterables: Iterable[Iterable]) -> Iterable:
@@ -198,15 +199,6 @@ def main():
     file_lock = Lock() if args.output is not None else None
     file_ref = open(args.output, 'a') if args.output is not None else None
 
-    output_timer = Timer(1, lambda: update_status(
-        current_count=counter.value,
-        results=result_counter.value,
-        num_addresses=num_addresses,
-        timer=output_timer
-    ))
-
-    output_timer.start()
-
     start_scan(
         threads=args.threads,
         ip_iterator=iterator,
@@ -221,10 +213,14 @@ def main():
             result=output_text,
             output_file=file_ref,
             output_lock=file_lock
+        ),
+        status_updater=lambda: update_status(
+            current_count=counter.value,
+            results=result_counter.value,
+            num_addresses=num_addresses
         )
     )
 
-    output_timer.cancel()
     print(f'Done. Found {result_counter.value} servers.')
 
 
