@@ -12,7 +12,7 @@ from typing import Iterable, Iterator, Callable, TextIO
 from mcstatus import JavaServer
 from mcstatus.pinger import PingResponse
 
-from AsynchronousCounter import AsynchronousCounter
+from asynchronous_counter import AsynchronousCounter
 from buffered_iterator import BufferedIterator
 
 
@@ -154,7 +154,7 @@ def update_status(
     prog_true = current_percentage // 2
     prog_false = 50 - prog_true
 
-    prog_str = '[' + prog_true * '#' + (100 - prog_false) * '-' + \
+    prog_str = '[' + prog_true * '#' + prog_false * '-' + \
                f'] {current_percentage}% (scanned {current_count} / {num_addresses}) {results} found'
     print_thread_safe(
         prog_str,
